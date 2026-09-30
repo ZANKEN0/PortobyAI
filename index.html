@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>~/whoami</title>
+<style>
+  :root{
+    --bg:#07090c;--ink:#c8f5d4;--dim:#4a6b57;--accent:#3ef2a1;
+    --warn:#ffcc66;--mono:'JetBrains Mono','Fira Code',ui-monospace,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--ink);font-family:var(--mono)}
+
+  /* scanline + vignette */
+  body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:50;
+    background:repeating-linear-gradient(to bottom,rgba(0,0,0,0) 0 2px,rgba(0,0,0,.18) 2px 4px)}
+  body::after{content:'';position:fixed;inset:0;pointer-events:none;z-index:51;
+    background:radial-gradient(ellipse at center,transparent 55%,rgba(0,0,0,.75) 100%)}
+
+  canvas#scene{position:fixed;inset:0;display:block;z-index:1}
+  canvas#trail{position:fixed;inset:0;pointer-events:none;z-index:40}
+
+  /* BOOT */
+  #boot{position:fixed;inset:0;z-index:30;background:var(--bg);padding:clamp(20px,6vw,80px);
+    display:flex;flex-direction:column;justify-content:center;transition:opacity .8s,filter .8s}
+  #boot.gone{opacity:0;filter:blur(14px);pointer-events:none}
+  #log{font-size:clamp(11px,1.5vw,15px);line-height:1.9;white-space:pre-wrap;color:var(--dim)}
+  #log b{color:var(--accent);font-weight:400}
+  #log .w{color:var(--warn)}
+  #prompt{margin-top:22px;font-size:clamp(13px,1.8vw,18px);color:var(--ink);opacity:0}
+  #prompt.on{opacity:1}
+  .caret{display:inline-block;width:.6em;height:1.05em;background:var(--accent);
+    vertical-align:-.15em;margin-left:.25em;animation:blink 1.05s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  #hint{margin-top:26px;font-size:11px;color:var(--dim);letter-spacing:.14em;text-transform:uppercase;opacity:0;transition:opacity .6s}
+  #hint.on{opacity:1}
+
+  /* HUD */
+  #hud{position:fixed;z-index:45;inset:0;pointer-events:none;opacity:0;transition:opacity 1s .3s}
+  #hud.on{opacity:1}
+  .hud-l,.hud-r{position:absolute;font-size:10.5px;letter-spacing:.16em;color:var(--dim);text-transform:uppercase;line-height:1.8}
+  .hud-l{top:26px;left:28px}
+  .hud-r{bottom:26px;right:28px;text-align:right}
+  .hud-l span{color:var(--accent)}
+  #skip{position:absolute;top:24px;right:28px;pointer-events:auto;cursor:pointer;
+    border:1px solid var(--dim);background:transparent;color:var(--dim);
+    font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+    padding:8px 14px;transition:.25s}
+  #skip:hover{border-color:var(--accent);color:var(--accent);box-shadow:0 0 22px rgba(62,242,161,.25)}
+
+  /* PANEL */
+  #panel{position:fixed;z-index:46;right:0;top:0;height:100%;width:min(440px,92vw);
+    background:linear-gradient(to left,rgba(7,9,12,.97),rgba(7,9,12,.86));
+    border-left:1px solid var(--dim);backdrop-filter:blur(6px);
+    transform:translateX(101%);transition:transform .55s cubic-bezier(.2,.9,.2,1);
+    padding:clamp(28px,4vw,48px);overflow-y:auto}
+  #panel.open{transform:none}
+  #panel h2{font-size:13px;letter-spacing:.2em;text-transform:uppercase;color:var(--accent);margin-bottom:20px}
+  #panel p{font-size:13.5px;line-height:1.85;color:#9fbfae;margin-bottom:16px}
+  #panel .kv{display:flex;justify-content:space-between;border-bottom:1px dashed rgba(74,107,87,.4);padding:9px 0;font-size:12px}
+  #panel .kv i{font-style:normal;color:var(--dim)}
+  #close{position:absolute;top:22px;right:22px;background:none;border:1px solid var(--dim);color:var(--dim);
+    width:30px;height:30px;cursor:pointer;font-family:var(--mono);transition:.2s}
+  #close:hover{color:var(--accent);border-color:var(--accent);transform:rotate(90deg)}
+
+  /* GATE */
+  #gate{position:fixed;z-index:47;left:50%;bottom:8vh;transform:translate(-50%,140%);
+    display:flex;gap:10px;transition:transform .7s cubic-bezier(.2,.9,.2,1);flex-wrap:wrap;justify-content:center;padding:0 16px}
+  #gate.on{transform:translate(-50%,0)}
+  #gate button{background:rgba(7,9,12,.8);border:1px solid var(--dim);color:var(--dim);
+    font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+    padding:11px 18px;cursor:pointer;transition:.25s;backdrop-filter:blur(4px)}
+  #gate button:hover,#gate button.sel{color:var(--bg);background:var(--accent);border-color:var(--accent)}
+
+  @media(max-width:640px){.hud-l,.hud-r{font-size:9px}#panel{width:100%}}
+</style>
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+<canvas id="trail"></canvas>
+
+<div id="boot">
+  <div id="log"></div>
+  <div id="prompt">&gt; whoami<span class="caret"></span></div>
+  <div id="hint">[ enter ] masuk · [ help ] perintah</div>
+</div>
+
+<div id="hud">
+  <div class="hud-l">node <span>/home/dev</span><br>mode <span id="modeLabel">recruiter</span><br>fps <span id="fps">60</span></div>
+  <div class="hud-r">drag · rotasi ruang<br>scroll · kedalaman<br>klik · buka simpul</div>
+  <button id="skip">skip ke versi datar</button>
+</div>
+
+<aside id="panel">
+  <button id="close">×</button>
+  <h2 id="pTitle">—</h2>
+  <div id="pBody"></div>
+</aside>
+
+<div id="gate"></div>
+
+<script>
+/* ============ DATA ============ */
+const NODES = [
+  { id:'skill', label:'SKILL', kind:'cube', pos:[-3.2,1.4,-1], rot:0,
+    title:'stack / runtime',
+    body:{recruiter:['6 tahun shipped di production. Fokus backend + infrastruktur.','Yang bikin kamu relevan: kemampuan muter arah cepat tiap ada tech baru.'],
+           client:['Tim kecil, hasil gede. Kamu bayar untuk outcome, bukan jam kerja.','Stack dipilih buat maintenance jangka panjang, bukan tren.'],
+           dev:['Go, TypeScript, Postgres, K8s. Suka yang boring dan bisa di-debug jam 3 pagi.','Nggak ada magic. Semua config ada di repo.'] },
+    kv:[['primary','TypeScript / Go'],['depth','backend + infra'],['learning','Rust, WASM']] },
+
+  { id:'proj', label:'PROJECT', kind:'shard', pos:[3,.6,.8], rot:0,
+    title:'artifacts / selected',
+    body:{recruiter:['4 produk dari nol sampai dipakai orang. Rata-rata 11 bulan ke rilis.'],
+           client:['Kasus paling relevan: sistem pembayaran dengan uptime 99.98% selama 14 bulan.'],
+           dev:['Semua repo publik. Yang menarik justru commit pas refactor arsitektur event-driven.'] },
+    kv:[['shipped','12 project'],['open source','4 repo'],['load','2.1M req/hari']] },
+
+  { id:'exp', label:'TIMELINE', kind:'ring', pos:[.4,-2.2,1.6], rot:0,
+    title:'experience / log',
+    body:{recruiter:['Senior Engineer, 2021–sekarang. Lead tim 4 orang.'],
+           client:['Sejak 2019 mostly kontrak jangka menengah: audit, rebuild, handover bersih.'],
+           dev:['Mulai dari support ticket, naik ke platform. Belajar paling banyak dari incident postmortem.'] },
+    kv:[['total','6 tahun'],['lead','4 engineer'],['industri','fintech, healthtech']] },
+
+  { id:'contact', label:'CONTACT', kind:'star', pos:[0,.2,-6.5], rot:0,
+    title:'handshake / open',
+    body:{recruiter:['Available Q1. Bisa mulai remote full-time atau part-time advisory.'],
+           client:['Slot proyek baru dibuka per kuartal. Reply dalam 24 jam kerja.'],
+           dev:['Ngobrol teknis? DM aja. Nggak jutek, cuma lambat bales kalau lagi deep work.'] },
+    kv:[['email','halo@domainkamu.dev'],['github','/username'],['tz','GMT+7']] }
+];
+
+/* ============ BOOT SEQUENCE ============ */
+const logEl=document.getElementById('log'),promptEl=document.getElementById('prompt'),hintEl=document.getElementById('hint');
+let li=0;
+function typeLine(){
+  if(li>=BOOT_LINES.length){promptEl.classList.add('on');setTimeout(()=>hintEl.classList.add('on'),400);return}
+  const[txt,delay]=BOOT_LINES[li++];
+  const line=document.createElement('div');logEl.appendChild(line);
+  let ci=0;
+  const tick=setInterval(()=>{
+    line.innerHTML=txt.replace('[ OK ]','<b>[ OK ]</b>').replace('[ WARN ]','<span class="w">[ WARN ]</span>');
+    if(ci++>txt.length){clearInterval(tick);setTimeout(typeLine,110)}
+  },11);
+}
+const BOOT_LINES=[
+  ['[ OK ] mounting /skills/typescript ......... done',0],
+  ['[ OK ] mounting /skills/golang ............. done',1],
+  ['[ OK ] loading /experience/6yr ............. done',1],
+  ['[ WARN ] coffee_level = critical',2],
+  ['[ OK ] indexing /projects (12) ............. done',1],
+  ['[ OK ] user "you" authenticated as guest',2],
+  ['[ OK ] spatial renderer online',1]
+];
+setTimeout(typeLine,450);
+
+function enterWorld(){
+  if(document.getElementById('boot').classList.contains('gone'))return;
+  document.getElementById('boot').classList.add('gone');
+  document.getElementById('hud').classList.add('on');
+  setTimeout(showGate,900);
+}
+addEventListener('keydown',e=>{if(e.key==='Enter')enterWorld()});
+document.getElementById('boot').addEventListener('click',enterWorld);
+
+/* ============ AUDIENCE GATE ============ */
+let audience='recruiter';
+const gate=document.getElementById('gate');
+['recruiter','client','fellow dev'].forEach((r,i)=>{
+  const b=document.createElement('button');b.textContent=r;
+  if(i===0)b.classList.add('sel');
+  b.onclick=()=>{audience=r;document.getElementById('modeLabel').textContent=r;
+    [...gate.children].forEach(c=>c.classList.remove('sel'));b.classList.add('sel')};
+  gate.appendChild(b);
+});
+function showGate(){gate.classList.add('on')}
+
+/* ============ 3D SCENE ============ */
+const cv=document.getElementById('scene'),ctx=cv.getContext('2d');
+const tv=document.getElementById('trail'),tctx=tv.getContext('2d');
+let W,H,DPR=Math.min(devicePixelRatio||1,2);
+function resize(){W=innerWidth;H=innerHeight;
+  [cv,tv].forEach(c=>{c.width=W*DPR;c.height=H*DPR;c.style.width=W+'px';c.style.height=H+'px'});
+  ctx.setTransform(DPR,0,0,DPR,0,0);tctx.setTransform(DPR,0,0,DPR,0,0)}
+resize();addEventListener('resize',resize);
+
+let yaw=0,pitch=0,zoom=1,vyaw=.0016,targetZoom=1;
+const dragging={active:false,lastX:0,lastY:0};
+
+cv.addEventListener('mousedown',e=>{dragging.active=true;dragging.lastX=e.clientX;dragging.lastY=e.clientY});
+addEventListener('mousemove',e=>{
+  if(dragging.active){yaw+=(e.clientX-dragging.lastX)*.005;pitch+=(e.clientY-dragging.lastY)*.005;
+    pitch=Math.max(-1.2,Math.min(1.2,pitch));dragging.lastX=e.clientX;dragging.lastY=e.clientY}
+  cursorTrail(e.clientX,e.clientY)});
+addEventListener('mouseup',()=>{dragging.active=false});
+cv.addEventListener('wheel',e=>{targetZoom*=e.deltaY>0?.92:1.08;targetZoom=Math.max(.4,Math.min(2.5,targetZoom))},{passive:true});
+
+/* Touch support */
+cv.addEventListener('touchstart',e=>{if(e.touches.length===1){dragging.active=true;dragging.lastX=e.touches[0].clientX;dragging.lastY=e.touches[0].clientY}},{passive:true});
+cv.addEventListener('touchmove',e=>{if(dragging.active&&e.touches.length===1){yaw+=(e.touches[0].clientX-dragging.lastX)*.005;pitch+=(e.touches[0].clientY-dragging.lastY)*.005;
+  pitch=Math.max(-1.2,Math.min(1.2,pitch));dragging.lastX=e.touches[0].clientX;dragging.lastY=e.touches[0].clientY}},{passive:true});
+cv.addEventListener('touchend',()=>{dragging.active=false});
+
+/* Click on nodes */
+cv.addEventListener('click',e=>{
+  const mx=e.clientX,my=e.clientY;
+  let closest=null,minD=30;
+  NODES.forEach(n=>{const p=project(n.pos);if(p){const d=Math.hypot(p.x-mx,p.y-my);if(d<minD){minD=d;closest=n}}});
+  if(closest)openPanel(closest);
+});
+
+/* ============ PROJECTION ============ */
+function project(p){
+  let[x,y,z]=p;
+  const cx=Math.cos(yaw),sx=Math.sin(yaw);
+  let x1=x*cx-z*sx,z1=x*sx+z*cx;
+  const cy=Math.cos(pitch),sy=Math.sin(pitch);
+  let y1=y*cy-z1*sy,z2=y*sy+z1*cy;
+  z2+=8/zoom;
+  if(z2<=.4)return null;
+  const f=Math.min(W,H)*.9;
+  return{x:W/2+x1*f/z2,y:H/2+y1*f/z2,d:z2}
+}
+
+/* ============ DRAW SHAPES ============ */
+function drawCube(s){
+  const v=[[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+  const e=[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  const c=Math.cos(s.rot),si=Math.sin(s.rot);
+  const pts=v.map(([x,y,z])=>{
+    let x1=x*c-z*si,z1=x*si+z*c,y1=y*c-z1*si*.4;
+    return project([s.pos[0]+x1*.75,s.pos[1]+y1*.75,s.pos[2]+z1*.75])
+  });
+  ctx.strokeStyle='rgba(62,242,161,.55)';ctx.lineWidth=1;ctx.beginPath();
+  e.forEach(([a,b])=>{if(pts[a]&&pts[b]){ctx.moveTo(pts[a].x,pts[a].y);ctx.lineTo(pts[b].x,pts[b].y)}});
+  ctx.stroke();
+  // label
+  const center=pts.filter(Boolean);if(center.length){
+    const avg={x:center.reduce((a,p)=>a+p.x,0)/center.length,y:center.reduce((a,p)=>a+p.y,0)/center.length};
+    ctx.fillStyle='rgba(62,242,161,.7)';ctx.font='10.5px '+getComputedStyle(document.body).fontFamily;
+    ctx.fillText(s.label,avg.x+12,avg.y-4)}
+  return pts.filter(Boolean)
+}
+
+function drawShard(s){
+  const pts=[];
+  for(let i=0;i<5;i++){const a=s.rot+i*1.256,r=.8+(i%2?.35:0);
+    const p=project([s.pos[0]+Math.cos(a)*r,s.pos[1]+Math.sin(a)*r,s.pos[2]+Math.sin(a*2)*.4]);
+    if(p)pts.push(p)}
+  ctx.strokeStyle='rgba(255,204,102,.6)';ctx.lineWidth=1;ctx.beginPath();
+  pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+  if(pts.length>2)ctx.closePath();ctx.stroke();
+  ctx.fillStyle='rgba(255,204,102,.7)';ctx.font='10.5px '+getComputedStyle(document.body).fontFamily;
+  ctx.fillText(s.label,pts[0]?pts[0].x+12:0,pts[0]?pts[0].y-4:0);
+  return pts
+}
+
+function drawRing(s){
+  const pts=[];
+  for(let i=0;i<30;i++){const a=i/30*Math.PI*2,r=1;
+    const p=project([s.pos[0]+Math.cos(a)*r,s.pos[1]+Math.sin(a)*r*.5,s.pos[2]+Math.sin(a)*r*.3]);
+    if(p)pts.push(p)}
+  ctx.strokeStyle='rgba(140,180,255,.5)';ctx.lineWidth=1;ctx.beginPath();
+  pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+  if(pts.length>2)ctx.closePath();ctx.stroke();
+  ctx.fillStyle='rgba(140,180,255,.7)';ctx.font='10.5px '+getComputedStyle(document.body).fontFamily;
+  ctx.fillText(s.label,pts[0]?pts[0].x+12:0,pts[0]?pts[0].y-4:0);
+  return pts
+}
+
+function drawStar(s){
+  const pts=[];
+  for(let i=0;i<6;i++){const a=i/6*Math.PI*2,r=i%2?.35:1;
+    const p=project([s.pos[0]+Math.cos(a)*r,s.pos[1]+Math.sin(a)*r,s.pos[2]]);
+    if(p)pts.push(p)}
+  ctx.strokeStyle='rgba(255,120,180,.55)';ctx.lineWidth=1;ctx.beginPath();
+  pts.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));
+  if(pts.length>2)ctx.closePath();ctx.stroke();
+  ctx.fillStyle='rgba(255,120,180,.7)';ctx.font='10.5px '+getComputedStyle(document.body).fontFamily;
+  ctx.fillText(s.label,pts[0]?pts[0].x+12:0,pts[0]?pts[0].y-4:0);
+  return pts
+}
+
+/* ============ CURSOR TRAIL ============ */
+let trail=[];
+function cursorTrail(x,y){trail.push({x,y,a:1});if(trail.length>60)trail.shift()}
+function drawTrail(){
+  tctx.clearRect(0,0,W,H);
+  trail=trail.filter(p=>p.a>0);
+  trail.forEach(p=>{
+    p.a-=.03;
+    tctx.fillStyle=`rgba(62,242,161,${p.a*.35})`;
+    tctx.fillRect(p.x-1,p.y-1,2,2);
+    // random hex char
+    if(Math.random()<.08){
+      tctx.fillStyle=`rgba(62,242,161,${p.a*.2})`;
+      tctx.font='8px '+getComputedStyle(document.body).fontFamily;
+      tctx.fillText('0x'+Math.floor(Math.random()*65535).toString(16).padStart(4,'0'),p.x+3,p.y)}
+  })
+}
+
+/* ============ PANEL ============ */
+const panel=document.getElementById('panel'),pTitle=document.getElementById('pTitle'),pBody=document.getElementById('pBody');
+function openPanel(n){
+  pTitle.textContent='> '+n.title;
+  const body=n.body[audience]||n.body.recruiter;
+  let html=body.map(t=>`<p>${t}</p>`).join('');
+  html+=n.kv.map(([k,v])=>`<div class="kv"><i>${k}</i>${v}</div>`).join('');
+  pBody.innerHTML=html;
+  panel.classList.add('open');
+}
+document.getElementById('close').onclick=()=>panel.classList.remove('open');
+document.getElementById('skip').onclick=()=>{panel.classList.remove('open');alert('Versi datar: ganti canvas ini dengan layout HTML biasa\n— kamu tinggal swap komponen 3D → grid CSS. Tetap terminal aesthetic, tinggal klik-klik biasa.')};
+
+/* ============ MAIN LOOP ============ */
+let last=performance.now();let frames=0,fps=60;
+function loop(now){
+  requestAnimationFrame(loop);
+  frames++;if(now-last>500){fps=Math.round(frames/((now-last)/1000));frames=0;last=now;document.getElementById('fps').textContent=fps}
+  const dt=(now-(loop.prev||now))/1000;loop.prev=now;
+  zoom+=(targetZoom-zoom)*.06;
+  if(!dragging.active)yaw+=vyaw;
+  ctx.clearRect(0,0,W,H);
+  // grid
+  ctx.strokeStyle='rgba(62,242,161,.04)';ctx.lineWidth=.5;
+  for(let x=0;x<W;x+=60){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}
+  for(let y=0;y<H;y+=60){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}
+  // nodes sorted by depth
+  const sorted=[...NODES].sort((a,b)=>{const pa=project(a.pos),pb=project(b.pos);return(pa?pb?pb.d-pa.d:1:-1)});
+  sorted.forEach(n=>{
+    if(n.kind==='cube')drawCube(n);
+    else if(n.kind==='shard')drawShard(n);
+    else if(n.kind==='ring')drawRing(n);
+    else if(n.kind==='star')drawStar(n);
+    n.rot+=dt*.3;
+  });
+  drawTrail();
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
